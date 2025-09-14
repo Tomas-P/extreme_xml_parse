@@ -355,3 +355,24 @@ fn recognize_nested_elems() {
     }
 }
 
+#[test]
+fn recognize_version() {
+    let text = "   version    = \t  \"1.0\"";
+    let chars :Vec<char> = text.chars().collect();
+    let ver_parse = parse_version(&chars, 0);
+    match ver_parse {
+        Ok(ver) => assert_eq!(ver.get_endpos(), chars.len()),
+        Err(e) => assert!(false, "should be valid parse, instead: {:?}", e),
+    }
+}
+
+#[test]
+fn recognize_encoding() {
+    let text = "  encoding = 'utf-8'";
+    let chars :Vec<char> = text.chars().collect();
+    let enc_parse = parse_encoding(&chars, 0);
+    match enc_parse {
+        Ok(enc) => assert_eq!(enc.get_endpos(), chars.len()),
+        Err(e) => assert!(false, "should be valid parse, instead: {:?}", e),
+    }
+}
