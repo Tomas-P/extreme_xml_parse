@@ -917,7 +917,14 @@ fn parse_reference(text: &[char], start: usize) -> Result<Reference, XmlError> {
     }
 }
 
-struct Prolog;
+struct Prolog {
+    xml_decl :Option<XmlDecl>,
+    doctype_decl :Option<DoctypeDecl>,
+    miscs :Vec<Misc>,
+}
+
+struct XmlDecl;
+struct DoctypeDecl;
 
 pub enum Elem {
     Empty(EmptyElem),

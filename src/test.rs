@@ -333,3 +333,25 @@ fn recognize_cdsect() {
         Err(e) => assert!(false, "should be valid parse, instead: {:?}", e),
     }
 }
+
+#[test]
+fn recognize_nested_elems() {
+    let text = "<outer> 
+    stuff 
+    <?more stuff?> 
+    <inner>
+    <!-- some other stuff -->
+    </inner>
+    <![CDATA[ even more stuff ]]>
+
+    </outer>";
+
+    let chars :Vec<char> = text.chars().collect();
+
+    let elem_parse = parse_elem(&chars, 0, 0);
+    match elem_parse {
+        Ok(_elem) => (),
+        Err(e) => assert!(false, "should be valid parse, instead: {:?}", e),
+    }
+}
+
