@@ -167,7 +167,7 @@ impl Ends for CDSect {
 
 impl Ends for XmlDecl {
     fn get_endpos(&self) -> usize {
-        unimplemented!();
+        self.end
     }
 }
 
@@ -185,7 +185,7 @@ impl Ends for Encoding {
 
 impl Ends for SDDecl {
     fn get_endpos(&self) -> usize {
-        unimplemented!();
+        self.end
     }
 }
 
@@ -286,7 +286,46 @@ fn parse_eq(text :&[char], start :usize) -> Result<EqHelper, XmlError> {
 }
 
 fn parse_standalone(text :&[char], start :usize) -> Result<SDDecl, XmlError> {
-    todo!();
+    let lead_ws = parse_ws(text, start)?;
+    let pos = lead_ws.get_endpos();
+    let subtext = &text[pos..];
+    let needle :Vec<char> = "standalone".chars().collect();
+    if subtext.starts_with(&needle) {
+        let pos1 = pos + needle.len();
+        let eq = parse_eq(text, pos1)?;
+        let pos2 = eq.end;
+        let subtext2 = &text[pos2..];
+        let needle1 :Vec<char> = "\"yes\"".chars().collect();
+        let needle2 :Vec<char> = "\'yes\'".chars().collect();
+        let needle3 :Vec<char> = "\"no\"".chars().collect();
+        let needle4 :Vec<char> = "\'no\'".chars().collect();
+        let mut here = pos2;
+        let is_standalone = if subtext2.starts_with(&needle1) {
+            here += 5;
+            true
+        } else if subtext2.starts_with(&needle2) {
+            here += 5;
+            true
+        } else if subtext2.starts_with(&needle3) {
+            here += 4;
+            false
+        } else if subtext.starts_with(&needle4) {
+            here += 4;
+            false
+        } else {
+            return Err(XmlError::KeywordMatchFail);
+        };
+        let standalone = SDDecl {
+            start : start,
+            end : here,
+            is_standalone : is_standalone,
+        };
+
+        Ok(standalone)
+
+    } else {
+        Err(XmlError::KeywordMatchFail)
+    }
 }
 
 fn parse_encoding(text :&[char], start :usize) -> Result<Encoding, XmlError> {

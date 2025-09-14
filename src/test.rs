@@ -376,3 +376,37 @@ fn recognize_encoding() {
         Err(e) => assert!(false, "should be valid parse, instead: {:?}", e),
     }
 }
+
+#[test]
+fn recognize_standalone() {
+    let text = "   standalone =  \"yes\"";
+    let chars :Vec<char> = text.chars().collect();
+    let stand_parse = parse_standalone(&chars, 0);
+    match stand_parse {
+        Ok(stand) => assert_eq!(stand.get_endpos(), chars.len()),
+        Err(e) => assert!(false, "should be valid parse, instead: {:?}", e),
+    }
+}
+
+#[test]
+fn recognize_xmldecl_version() {
+    let text = "<?xml version = \'1.0\' ?>";
+    let chars :Vec<char> = text.chars().collect();
+    let xdecl_parse = parse_xmldecl(&chars, 0);
+    match xdecl_parse {
+        Ok(xdecl) => assert_eq!(xdecl.get_endpos(), chars.len()),
+        Err(e) => assert!(false, "should be valid parse, instead :{:?}", e),
+    }
+}
+
+#[test]
+fn recognize_xmldecl() {
+    let text = "<?xml version = \'1.0\' encoding = \'utf-8\' standalone = \'yes\' ?>";
+    let chars :Vec<char> = text.chars().collect();
+    let xdecl_parse = parse_xmldecl(&chars, 0);
+    match xdecl_parse {
+        Ok(xdecl) => assert_eq!(xdecl.get_endpos(), chars.len()),
+        Err(e) => assert!(false, "should be valid parse, instead: {:?}", e),
+    }
+}
+
