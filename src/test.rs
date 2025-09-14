@@ -322,3 +322,14 @@ fn recognize_data() {
         Err(e) => assert!(false, "should be valid parse, instead: {:?}", e),
     }
 }
+
+#[test]
+fn recognize_cdsect() {
+    let text = "<![CDATA[ this is a CDATA section ]]>";
+    let chars :Vec<char> = text.chars().collect();
+    let cdata_parse = parse_cdsect(&chars, 0);
+    match cdata_parse {
+        Ok(cdsect) => assert_eq!(cdsect.get_endpos(), chars.len()),
+        Err(e) => assert!(false, "should be valid parse, instead: {:?}", e),
+    }
+}
