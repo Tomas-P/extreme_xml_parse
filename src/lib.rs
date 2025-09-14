@@ -1,0 +1,1045 @@
+#[cfg(test)]
+mod test;
+
+#[derive(Debug)]
+pub enum XmlError {
+    /// character not allowed in current parsing context
+    BadChar(char),
+    /// recursion depth max exceeded
+    MaxRecurDepth(u32),
+    /// text ends before parsing complete
+    TextEnd,
+    /// available text does not match any variant of the parsing rule
+    NoValidVariant,
+    /// illegal substring encountered
+    IllegalSubstr,
+    /// use of name xml which is reserved
+    ReservedNameXml,
+    /// mismatch between opening and closing tags
+    MismatchedTags(String, String),
+    /// did not see opening <![CDATA[ tag while attempting to parse CDSect
+    BadCDATAStart,
+    /// No available data when trying to parse for character data
+    /// Need to make this an error because the rest of the parser doesn't expect 
+    /// zero-length elements
+    NoData
+}
+
+trait Ends {
+    /// Return the index of the first character that is not part of the node
+    /// that occurs after the node
+    fn get_endpos(&self) -> usize;
+}
+
+impl Ends for Prolog {
+    fn get_endpos(&self) -> usize {
+        0usize
+    }
+}
+
+impl Ends for Elem {
+    fn get_endpos(&self) -> usize {
+        match &self {
+            Elem::Empty(empty) => empty.get_endpos(),
+            Elem::Full(full) => full.get_endpos(),
+        }
+    }
+}
+
+impl Ends for FullElem {
+    fn get_endpos(&self) -> usize {
+        self.end.get_endpos()
+    }
+}
+
+impl Ends for Content {
+    fn get_endpos(&self) -> usize {
+        match self.items.last() {
+            Some(item) => item.get_endpos(),
+            None => self.start,
+        }
+    }
+}
+
+impl Ends for Misc {
+    fn get_endpos(&self) -> usize {
+        match &self {
+            &Misc::Ws(ws) => ws.get_endpos(),
+            &Misc::Comment(comment) => comment.get_endpos(),
+            &Misc::ProcInstr(pi) => pi.get_endpos(),
+        }
+    }
+}
+
+impl Ends for Ws {
+    fn get_endpos(&self) -> usize {
+        self.start + self.text.len()
+    }
+}
+
+impl Ends for Comment {
+    fn get_endpos(&self) -> usize {
+        self.start + self.text.len() + "<!--".len() + "-->".len()
+    }
+}
+
+impl Ends for ProcInstr {
+    fn get_endpos(&self) -> usize {
+        let mut endpos = self.start + self.target.name.0.len() + 4;
+        match &self.space {
+            Some(ws) => {
+                endpos += ws.text.len();
+            }
+            None => (),
+        };
+        match &self.arg {
+            Some(s) => {
+                endpos += s.len();
+            }
+            None => (),
+        };
+        endpos
+    }
+}
+
+impl Ends for Attribute {
+    fn get_endpos(&self) -> usize {
+        self.end
+    }
+}
+
+impl Ends for AttValue {
+    fn get_endpos(&self) -> usize {
+        let mut pos = self.start;
+        for item in &self.items {
+            pos += item.text_len();
+        }
+        pos + 2 // take qoute chars into account
+    }
+}
+
+impl Ends for EmptyElem {
+    fn get_endpos(&self) -> usize {
+        self.end
+    }
+}
+
+impl Ends for STag {
+    fn get_endpos(&self) -> usize {
+        self.end
+    }
+}
+
+impl Ends for ETag {
+    fn get_endpos(&self) -> usize {
+        self.end
+    }
+}
+
+impl Ends for ContentItem {
+    fn get_endpos(&self) -> usize {
+        match &self {
+            ContentItem::Elem(elem) => elem.get_endpos(),
+            ContentItem::Reference { start, reference } => start + reference.text_len(),
+            ContentItem::ProcInstr(pi) => pi.get_endpos(),
+            ContentItem::Comment(comment) => comment.get_endpos(),
+            ContentItem::CharData(chardata) => chardata.get_endpos(),
+            ContentItem::CDSect(cdsect) => cdsect.get_endpos(),
+        }
+    }
+}
+
+impl Ends for CharData {
+    fn get_endpos(&self) -> usize {
+        self.start + self.text.len()
+    }
+}
+
+impl Ends for CDSect {
+    fn get_endpos(&self) -> usize {
+        self.start + "<![CDATA[".len() + self.text.len() + "]]>".len()
+    }
+}
+
+pub struct Doc {
+    prolog: Prolog,
+    elem: Elem,
+    tail: Vec<Misc>,
+}
+
+pub fn parse_doc(text: &[char]) -> Result<Doc, XmlError> {
+    let prolog = parse_prolog(text, 0)?;
+    let p_end = prolog.get_endpos();
+    let elem = parse_elem(text, p_end, 0)?;
+    let e_end = elem.get_endpos();
+    let tail = parse_tail(text, e_end)?;
+    let doc = Doc {
+        prolog: prolog,
+        elem: elem,
+        tail: tail,
+    };
+    Ok(doc)
+}
+
+fn parse_prolog(text: &[char], start: usize) -> Result<Prolog, XmlError> {
+    todo!();
+}
+
+fn parse_tail(text: &[char], start: usize) -> Result<Vec<Misc>, XmlError> {
+    let mut buf = Vec::new();
+    let mut pos = start;
+    let mut maybe_misc = parse_misc(text, pos);
+    while let Ok(misc) = maybe_misc {
+        pos = misc.get_endpos();
+        buf.push(misc);
+        maybe_misc = parse_misc(text, pos);
+    }
+    if let Err(xml_err) = maybe_misc {
+        match xml_err {
+            XmlError::TextEnd => Ok(buf),
+            _ => Err(xml_err),
+        }
+    } else {
+        unreachable!("Should always exhaust XML tail");
+    }
+}
+
+fn parse_misc(text: &[char], start: usize) -> Result<Misc, XmlError> {
+    if let Ok(ws) = parse_ws(text, start) {
+        println!("parsed WS");
+        Ok(Misc::Ws(ws))
+    } else if let Ok(comment) = parse_comment(text, start) {
+        println!("parsed comment");
+        Ok(Misc::Comment(comment))
+    } else if let Ok(pi) = parse_pi(text, start) {
+        println!("parsed PI");
+        Ok(Misc::ProcInstr(pi))
+    } else if text.get(start).is_none() {
+        Err(XmlError::TextEnd)
+    } else {
+        Err(XmlError::NoValidVariant)
+    }
+}
+
+fn parse_comment(text: &[char], start: usize) -> Result<Comment, XmlError> {
+    let char0 = text.get(start).ok_or(XmlError::TextEnd)?;
+    if char0 == &'<' {
+        let char1 = text.get(start + 1).ok_or(XmlError::TextEnd)?;
+        if char1 == &'!' {
+            let char2 = text.get(start + 2).ok_or(XmlError::TextEnd)?;
+            let char3 = text.get(start + 3).ok_or(XmlError::TextEnd)?;
+            if char2 == &'-' && char3 == &'-' {
+                let mut buf = String::new();
+                let mut count = 0;
+                for c in &text[(start + 4)..] {
+                    match c {
+                        '-' => {
+                            count += 1;
+                        }
+                        '>' => {
+                            if count == 2 {
+                                match buf.pop() {
+                                    Some('-') => (),
+                                    Some(c) => {
+                                        return Err(XmlError::BadChar(c));
+                                    }
+                                    None => return Err(XmlError::TextEnd),
+                                };
+                                match buf.pop() {
+                                    Some('-') => (),
+                                    Some(c) => {
+                                        return Err(XmlError::BadChar(c));
+                                    }
+                                    None => return Err(XmlError::TextEnd),
+                                };
+                                let comment = Comment {
+                                    start: start,
+                                    text: buf,
+                                };
+                                return Ok(comment);
+                            } else if count > 2 {
+                                return Err(XmlError::IllegalSubstr);
+                            } else {
+                                count = 0;
+                            }
+                        }
+                        _ => {
+                            if count >= 2 {
+                                return Err(XmlError::IllegalSubstr);
+                            }
+                            count = 0;
+                        }
+                    };
+                    buf.push(*c);
+                }
+                Err(XmlError::TextEnd)
+            } else {
+                if char2 == &'-' {
+                    Err(XmlError::BadChar(*char3))
+                } else {
+                    Err(XmlError::BadChar(*char2))
+                }
+            }
+        } else {
+            Err(XmlError::BadChar(*char1))
+        }
+    } else {
+        Err(XmlError::BadChar(*char0))
+    }
+}
+
+fn parse_pi(text: &[char], start: usize) -> Result<ProcInstr, XmlError> {
+    let char0 = text.get(start).ok_or(XmlError::TextEnd)?;
+    if char0 == &'<' {
+        let char1 = text.get(start + 1).ok_or(XmlError::TextEnd)?;
+        if char1 == &'?' {
+            let target = parse_pitarget(text, start + 2)?;
+            let target_end = start + target.name.0.len() + 2;
+            let maybe_blank = parse_ws(text, target_end);
+            match maybe_blank {
+                Ok(ws) => {
+                    let blank_end = ws.get_endpos();
+                    let mut buf = String::new();
+                    let mut seen = false;
+                    for c in &text[blank_end..] {
+                        match *c {
+                            '?' => {
+                                seen = true;
+                            }
+                            '>' => {
+                                if seen {
+                                    let last = buf.pop().ok_or(XmlError::TextEnd)?;
+                                    if last == '?' {
+                                        let pi = ProcInstr {
+                                            start: start,
+                                            target: target,
+                                            space: Some(ws),
+                                            arg: Some(buf),
+                                        };
+                                        return Ok(pi);
+                                    } else {
+                                        return Err(XmlError::BadChar(last));
+                                    }
+                                }
+                            }
+                            _ => {
+                                seen = false;
+                            }
+                        };
+                        buf.push(*c);
+                    }
+                    Err(XmlError::TextEnd)
+                }
+                Err(xml_err) => match xml_err {
+                    XmlError::BadChar('?') => {
+                        let charlast = text.get(target_end + 1).ok_or(XmlError::TextEnd)?;
+                        if charlast == &'>' {
+                            let pi = ProcInstr {
+                                start: start,
+                                target: target,
+                                space: None,
+                                arg: None,
+                            };
+                            Ok(pi)
+                        } else {
+                            Err(XmlError::BadChar(*charlast))
+                        }
+                    }
+                    _ => Err(xml_err),
+                },
+            }
+        } else {
+            Err(XmlError::BadChar(*char1))
+        }
+    } else {
+        Err(XmlError::BadChar(*char0))
+    }
+}
+
+fn parse_pitarget(text: &[char], start: usize) -> Result<PITarget, XmlError> {
+    let name = parse_name(text, start)?;
+    if name.0.to_lowercase() == "xml" {
+        Err(XmlError::ReservedNameXml)
+    } else {
+        let target = PITarget { name: name };
+        Ok(target)
+    }
+}
+
+fn is_namestart(c: char) -> bool {
+    match c {
+        ':' | '_' | 'a'..='z' | 'A'..='Z' => true,
+        _ => match c as u32 {
+            0xC0..=0xD6 | 0xD8..=0xF6 | 0xF8..=0x2FF | 0x370..=0x37D => true,
+            0x37F..=0x1FFF | 0x200C..=0x200D | 0x2070..=0x218F | 0x2C00..=0x2FEF => true,
+            0x3001..=0xD7FF => true,
+            0xF900..=0xFDCF | 0xFDF0..=0xFFFD | 0x10000..=0xEFFFF => true,
+            _ => false,
+        },
+    }
+}
+
+fn is_namec(c: char) -> bool {
+    if is_namestart(c) {
+        true
+    } else {
+        match c {
+            '-' | '.' | '0'..='9' => true,
+            _ => match c as u32 {
+                0xB7 | 0x300..=0x36F | 0x203F..=0x2040 => true,
+                _ => false,
+            },
+        }
+    }
+}
+
+fn parse_name(text: &[char], start: usize) -> Result<Name, XmlError> {
+    let mut buf = String::new();
+    let c0 = text.get(start).ok_or(XmlError::TextEnd)?;
+    if is_namestart(*c0) {
+        buf.push(*c0);
+        for c in &text[(start + 1)..] {
+            if is_namec(*c) {
+                buf.push(*c);
+            } else {
+                break;
+            }
+        }
+        Ok(Name(buf))
+    } else {
+        Err(XmlError::BadChar(*c0))
+    }
+}
+
+fn parse_ws(text: &[char], start: usize) -> Result<Ws, XmlError> {
+    let char0 = match text.get(start) {
+        Some(c) => c,
+        None => {
+            return Err(XmlError::TextEnd);
+        }
+    };
+    match char0 {
+        ' ' | '\t' | '\n' | '\r' => {
+            let mut buf = String::new();
+            buf.push(*char0);
+            for c in &text[(start + 1)..] {
+                match c {
+                    ' ' | '\t' | '\n' | '\r' => {
+                        buf.push(*c);
+                    }
+                    _ => break,
+                };
+            }
+            let ws = Ws {
+                start: start,
+                text: buf,
+            };
+            Ok(ws)
+        }
+        _ => {
+            return Err(XmlError::BadChar(*char0));
+        }
+    }
+}
+
+fn parse_elem(text: &[char], start: usize, recurdepth: usize) -> Result<Elem, XmlError> {
+    let maybe_empty = parse_empty_elem(text, start);
+    match maybe_empty {
+        Ok(empty) => Ok(Elem::Empty(empty)),
+        Err(e) => match e {
+            XmlError::TextEnd => Err(e),
+            _ => {
+                let maybe_full = parse_full_elem(text, start, recurdepth + 1);
+                match maybe_full {
+                    Ok(full) => Ok(Elem::Full(full)),
+                    Err(e) => Err(e),
+                }
+            }
+        },
+    }
+}
+
+fn parse_empty_elem(text: &[char], start: usize) -> Result<EmptyElem, XmlError> {
+    let c0 = text.get(start).ok_or(XmlError::TextEnd)?;
+    if c0 == &'<' {
+        let name = parse_name(text, start + 1)?;
+        let pos = start + 1 + name.0.len();
+        let c1 = text.get(pos).ok_or(XmlError::TextEnd)?;
+        if c1 == &'/' {
+            let c2 = text.get(pos + 1).ok_or(XmlError::TextEnd)?;
+            if c2 == &'>' {
+                let empty = EmptyElem {
+                    start: start,
+                    end: pos + 2,
+                    name: name,
+                    attribs: Vec::new(),
+                };
+                Ok(empty)
+            } else {
+                Err(XmlError::BadChar(*c2))
+            }
+        } else {
+            let mut here = pos;
+            let mut attribs = Vec::new();
+            while text.get(here).ok_or(XmlError::TextEnd)? != &'/' {
+                let blank = parse_ws(text, here)?;
+                here = blank.get_endpos();
+                let maybe_attrib = parse_attribute(text, here);
+                match maybe_attrib {
+                    Ok(attrib) => {
+                        here = attrib.get_endpos();
+                        attribs.push(attrib);
+                    }
+                    Err(e) => match e {
+                        XmlError::BadChar('/') => break,
+                        _ => return Err(e),
+                    },
+                };
+            }
+            let c_here = text.get(here).ok_or(XmlError::TextEnd)?;
+            if c_here == &'/' {
+                let c_last = text.get(here + 1).ok_or(XmlError::TextEnd)?;
+                if c_last == &'>' {
+                    let empty = EmptyElem {
+                        name: name,
+                        start: start,
+                        end: here + 2,
+                        attribs: attribs,
+                    };
+                    Ok(empty)
+                } else {
+                    Err(XmlError::BadChar(*c_last))
+                }
+            } else {
+                Err(XmlError::BadChar(*c_here))
+            }
+        }
+    } else {
+        Err(XmlError::BadChar(*c0))
+    }
+}
+
+fn parse_attribute(text: &[char], start: usize) -> Result<Attribute, XmlError> {
+    let name = parse_name(text, start)?;
+    let pos = start + name.0.len();
+    let maybe_space1 = parse_ws(text, pos);
+    let pos1 = match maybe_space1 {
+        Ok(ws) => ws.get_endpos(),
+        Err(_e) => pos,
+    };
+    let echar = text.get(pos1).ok_or(XmlError::TextEnd)?;
+    if *echar == '=' {
+        let maybe_space2 = parse_ws(text, pos1 + 1);
+        let pos2 = match maybe_space2 {
+            Ok(ws) => ws.get_endpos(),
+            Err(_e) => pos1 + 1,
+        };
+        let value = parse_attvalue(text, pos2)?;
+        let attribute = Attribute {
+            start: start,
+            end: value.get_endpos(),
+            name: name,
+            value: value,
+        };
+        Ok(attribute)
+    } else {
+        Err(XmlError::BadChar(*echar))
+    }
+}
+
+fn parse_full_elem(text: &[char], start: usize, recurdepth: usize) -> Result<FullElem, XmlError> {
+    let start = parse_starttag(text, start)?;
+    let pos = start.get_endpos();
+    let maybe_content = parse_content(text, pos, recurdepth + 1);
+    let mut pos2 = pos;
+    let content = match maybe_content {
+        Ok(content) => {
+            pos2 = content.get_endpos();
+            Some(content)
+        }
+        Err(_e) => None,
+    };
+    let etag = parse_endtag(text, pos2)?;
+    if start.name.0 != etag.name.0 {
+        Err(XmlError::MismatchedTags(start.name.0, etag.name.0))
+    } else {
+        let full = FullElem {
+            start: start,
+            content: content,
+            end: etag,
+        };
+        Ok(full)
+    }
+}
+
+fn parse_starttag(text: &[char], start: usize) -> Result<STag, XmlError> {
+    let c0 = *text.get(start).ok_or(XmlError::TextEnd)?;
+    if c0 == '<' {
+        let name = parse_name(text, start + 1)?;
+        let pos = start + 1 + name.0.len();
+        let c1 = *text.get(pos).ok_or(XmlError::TextEnd)?;
+        if c1 == '>' {
+            let starttag = STag {
+                start: start,
+                end: pos + 1,
+                name: name,
+                attribs: Vec::new(),
+            };
+            Ok(starttag)
+        } else {
+            let mut here = pos;
+            let mut attribs = Vec::new();
+            while text.get(here).ok_or(XmlError::TextEnd)? != &'>' {
+                let blank = parse_ws(text, here)?;
+                here = blank.get_endpos();
+                let maybe_attrib = parse_attribute(text, here);
+                match maybe_attrib {
+                    Ok(attrib) => {
+                        here = attrib.get_endpos();
+                        attribs.push(attrib);
+                    }
+                    Err(e) => match e {
+                        XmlError::BadChar('>') => break,
+                        _ => {
+                            return Err(e);
+                        }
+                    },
+                };
+            }
+            let c_last = *text.get(here).ok_or(XmlError::TextEnd)?;
+            if c_last == '>' {
+                let starttag = STag {
+                    start: start,
+                    end: here + 1,
+                    name: name,
+                    attribs: attribs,
+                };
+                Ok(starttag)
+            } else {
+                Err(XmlError::BadChar(c_last))
+            }
+        }
+    } else {
+        Err(XmlError::BadChar(c0))
+    }
+}
+
+fn parse_content(text: &[char], start: usize, recurdepth: usize) -> Result<Content, XmlError> {
+    let mut items = Vec::new();
+    let mut position = start;
+    while let Ok(item) = parse_content_item(text, position, recurdepth + 1) {
+        position = item.get_endpos();
+        items.push(item);
+    }
+    let content = Content {
+        start: start,
+        items: items,
+    };
+    Ok(content)
+}
+
+fn parse_chardata(text: &[char], start: usize) -> Result<CharData, XmlError> {
+    let mut data = String::new();
+    let mut count = 0;
+    let mut hit_bad_substring = false;
+    let mut here = start;
+
+    while !hit_bad_substring {
+        let c = text.get(here).ok_or(XmlError::TextEnd)?;
+        match *c {
+            '<' => {
+                if data.len() > 0 {
+                    let cdata = CharData {
+                    start: start,
+                    text: data,
+                };
+                return Ok(cdata);
+                } else {
+                    return Err(XmlError::NoData);
+                }
+            }
+            '&' => {
+                if data.len() > 0 {
+                    let cdata = CharData {
+                    start: start,
+                    text: data,
+                };
+                return Ok(cdata);
+            } else {
+                return Err(XmlError::NoData);
+            }
+                
+            }
+            ']' => {
+                count += 1;
+                data.push(*c);
+            }
+            '>' => {
+                if count >= 2 {
+                    hit_bad_substring = true;
+                    here += 1;
+                    continue;
+                } else {
+                    count = 0;
+                    data.push(*c);
+                }
+            }
+            _ => {
+                count = 0;
+                data.push(*c);
+            }
+        };
+        here += 1;
+    }
+    Err(XmlError::IllegalSubstr)
+}
+
+fn parse_cdsect(text: &[char], start: usize) -> Result<CDSect, XmlError> {
+    let subtext = &text[start..];
+    let start_needle: Vec<char> = "<![CDATA[".chars().collect();
+    if subtext.starts_with(&start_needle) {
+        let pos = start + start_needle.len();
+        let mut count = 0;
+        let mut data = String::new();
+        for c in &text[pos..] {
+            match *c {
+                ']' => {
+                    count += 1;
+                    data.push(*c);
+                }
+                '>' => {
+                    if count >= 2 {
+                        let c_ult = data.pop();
+                        let c_pen = data.pop();
+                        match c_pen {
+                            Some(']') => match c_ult {
+                                Some(']') => {
+                                    let cdsect = CDSect {
+                                        start: start,
+                                        text: data,
+                                    };
+                                    return Ok(cdsect);
+                                }
+                                Some(c) => {
+                                    return Err(XmlError::BadChar(c));
+                                }
+                                None => {
+                                    unreachable!(
+                                        "hit unreachable condition when checking close delim for CDSect"
+                                    );
+                                }
+                            },
+                            Some(c) => {
+                                return Err(XmlError::BadChar(c));
+                            }
+                            None => {
+                                unreachable!(
+                                    "hit unreachable condition when checking close delim for CDSect"
+                                );
+                            }
+                        }
+                    } else {
+                        count = 0;
+                        data.push(*c);
+                    }
+                }
+                _ => {
+                    count = 0;
+                    data.push(*c);
+                }
+            }
+        }
+        Err(XmlError::TextEnd)
+    } else {
+        Err(XmlError::BadCDATAStart)
+    }
+}
+
+fn parse_content_item(
+    text: &[char],
+    start: usize,
+    recurdepth: usize,
+) -> Result<ContentItem, XmlError> {
+    if let Ok(reference) = parse_reference(text, start) {
+        let item = ContentItem::Reference {
+            start: start,
+            reference: reference,
+        };
+        Ok(item)
+    } else if let Ok(comment) = parse_comment(text, start) {
+        let item = ContentItem::Comment(comment);
+        Ok(item)
+    } else if let Ok(pi) = parse_pi(text, start) {
+        let item = ContentItem::ProcInstr(pi);
+        Ok(item)
+    } else if let Ok(chardata) = parse_chardata(text, start) {
+        let item = ContentItem::CharData(chardata);
+        Ok(item)
+    } else if let Ok(cdsect) = parse_cdsect(text, start) {
+        let item = ContentItem::CDSect(cdsect);
+        Ok(item)
+    } else if let Ok(elem) = parse_elem(text, start, recurdepth + 1) {
+        let boxed_elem = Box::new(elem);
+        let item = ContentItem::Elem(boxed_elem);
+        Ok(item)
+    } else {
+        let err = XmlError::NoValidVariant;
+        Err(err)
+    }
+}
+
+fn parse_endtag(text: &[char], start: usize) -> Result<ETag, XmlError> {
+    let c0 = *text.get(start).ok_or(XmlError::TextEnd)?;
+    if c0 == '<' {
+        let c1 = *text.get(start + 1).ok_or(XmlError::TextEnd)?;
+        if c1 == '/' {
+            let name = parse_name(text, start + 2)?;
+            let pos = start + 2 + name.0.len();
+            let closepos = match parse_ws(text, pos) {
+                Ok(ws) => ws.get_endpos(),
+                Err(_) => pos,
+            };
+            let c_last = *text.get(closepos).ok_or(XmlError::TextEnd)?;
+            if c_last == '>' {
+                let end = closepos + 1;
+                let etag = ETag {
+                    start: start,
+                    end: end,
+                    name: name,
+                };
+                Ok(etag)
+            } else {
+                Err(XmlError::BadChar(c_last))
+            }
+        } else {
+            Err(XmlError::BadChar(c1))
+        }
+    } else {
+        Err(XmlError::BadChar(c0))
+    }
+}
+
+fn parse_attvalue(text: &[char], start: usize) -> Result<AttValue, XmlError> {
+    let c0 = *text.get(start).ok_or(XmlError::TextEnd)?;
+    let single_qoute = c0 == '\'';
+    let mut items: Vec<AttValueItem> = Vec::new();
+    let mut end_hit = false;
+    let mut idx = start + 1;
+    let mut current_item = String::new();
+    while !end_hit {
+        let c = *text.get(idx).ok_or(XmlError::TextEnd)?;
+        if c == '\'' && single_qoute {
+            end_hit = true;
+            if current_item.len() > 0 {
+                let item = AttValueItem::Text(current_item);
+                items.push(item);
+            }
+            break;
+        } else if c == '\"' && !single_qoute {
+            end_hit = true;
+            if current_item.len() > 0 {
+                let item = AttValueItem::Text(current_item);
+                items.push(item);
+            }
+            break;
+        } else if c == '<' {
+            let err = XmlError::BadChar(c);
+            return Err(err);
+        } else if c == '&' {
+            if current_item.len() > 0 {
+                let item = AttValueItem::Text(current_item);
+                items.push(item);
+                current_item = String::new();
+            }
+            let reference = parse_reference(text, idx)?;
+            let item = AttValueItem::Reference(reference);
+            let length = item.text_len();
+            items.push(item);
+            idx += length;
+        } else {
+            current_item.push(c);
+            idx += 1;
+        }
+    }
+
+    let attvalue = AttValue {
+        start: start,
+        items: items,
+    };
+
+    Ok(attvalue)
+}
+
+fn parse_reference(text: &[char], start: usize) -> Result<Reference, XmlError> {
+    let c0 = *text.get(start).ok_or(XmlError::TextEnd)?;
+    if c0 == '&' {
+        let c1 = *text.get(start + 1).ok_or(XmlError::TextEnd)?;
+        if c1 == '#' {
+            let mut ref_text = String::new();
+            let mut at_start = true;
+            for c in &text[(start + 2)..] {
+                if c == &';' {
+                    break;
+                } else {
+                    match *c {
+                        '0'..='9' | 'a'..='f' | 'A'..='F' => {
+                            ref_text.push(*c);
+                        }
+                        'x' => {
+                            if at_start {
+                                ref_text.push(*c);
+                            } else {
+                                return Err(XmlError::BadChar(*c));
+                            }
+                        }
+                        _ => {
+                            return Err(XmlError::BadChar(*c));
+                        }
+                    };
+                }
+                at_start = false;
+            }
+            let reference = Reference::CharRef(ref_text);
+            Ok(reference)
+        } else {
+            let name = parse_name(text, start + 1)?;
+            let pos = start + 1 + name.0.len();
+            let c_last = *text.get(pos).ok_or(XmlError::TextEnd)?;
+            if c_last == ';' {
+                let reference = Reference::EntityRef(name);
+                Ok(reference)
+            } else {
+                Err(XmlError::BadChar(c_last))
+            }
+        }
+    } else {
+        Err(XmlError::BadChar(c0))
+    }
+}
+
+struct Prolog;
+
+pub enum Elem {
+    Empty(EmptyElem),
+    Full(FullElem),
+}
+
+pub struct EmptyElem {
+    start: usize,
+    end: usize,
+    name: Name,
+    attribs: Vec<Attribute>,
+}
+
+pub struct FullElem {
+    start: STag,
+    content: Option<Content>,
+    end: ETag,
+}
+
+struct STag {
+    start: usize,
+    end: usize,
+    name: Name,
+    attribs: Vec<Attribute>,
+}
+
+struct ETag {
+    start: usize,
+    end: usize,
+    name: Name,
+}
+
+pub struct Attribute {
+    start: usize,
+    end: usize,
+    name: Name,
+    value: AttValue,
+}
+
+struct AttValue {
+    start: usize,
+    items: Vec<AttValueItem>,
+}
+
+enum AttValueItem {
+    Text(String),
+    Reference(Reference),
+}
+
+impl AttValueItem {
+    fn text_len(&self) -> usize {
+        match &self {
+            AttValueItem::Text(s) => s.len(),
+            AttValueItem::Reference(reference) => reference.text_len(),
+        }
+    }
+}
+
+enum Reference {
+    EntityRef(Name),
+    CharRef(String),
+}
+
+impl Reference {
+    fn text_len(&self) -> usize {
+        match &self {
+            Reference::EntityRef(name) => name.0.len() + 2,
+            Reference::CharRef(s) => s.len() + 3,
+        }
+    }
+}
+
+struct Content {
+    start: usize,
+    items: Vec<ContentItem>,
+}
+
+enum ContentItem {
+    Elem(Box<Elem>),
+    Reference { start: usize, reference: Reference },
+    ProcInstr(ProcInstr),
+    Comment(Comment),
+    CharData(CharData),
+    CDSect(CDSect),
+}
+
+struct CDSect {
+    start: usize,
+    text: String,
+}
+
+struct CharData {
+    start: usize,
+    text: String,
+}
+
+pub enum Misc {
+    Ws(Ws),
+    Comment(Comment),
+    ProcInstr(ProcInstr),
+}
+
+#[derive(PartialEq, Debug)]
+pub struct Ws {
+    start: usize,
+    text: String,
+}
+
+pub struct Comment {
+    start: usize,
+    text: String,
+}
+
+pub struct ProcInstr {
+    start: usize,
+    target: PITarget,
+    space: Option<Ws>,
+    arg: Option<String>,
+}
+
+struct PITarget {
+    name: Name,
+}
+
+struct Name(String);
