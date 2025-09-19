@@ -314,8 +314,8 @@ fn recognize_starttag_attribs() {
 
 #[test]
 fn recognize_data() {
-    let text ="<TagName> data goes here </TagName>";
-    let chars :Vec<char> = text.chars().collect();
+    let text = "<TagName> data goes here </TagName>";
+    let chars: Vec<char> = text.chars().collect();
     let elem_parse = parse_elem(&chars, 0, 0);
     match elem_parse {
         Ok(elem) => assert_eq!(elem.get_endpos(), chars.len()),
@@ -326,7 +326,7 @@ fn recognize_data() {
 #[test]
 fn recognize_cdsect() {
     let text = "<![CDATA[ this is a CDATA section ]]>";
-    let chars :Vec<char> = text.chars().collect();
+    let chars: Vec<char> = text.chars().collect();
     let cdata_parse = parse_cdsect(&chars, 0);
     match cdata_parse {
         Ok(cdsect) => assert_eq!(cdsect.get_endpos(), chars.len()),
@@ -346,7 +346,7 @@ fn recognize_nested_elems() {
 
     </outer>";
 
-    let chars :Vec<char> = text.chars().collect();
+    let chars: Vec<char> = text.chars().collect();
 
     let elem_parse = parse_elem(&chars, 0, 0);
     match elem_parse {
@@ -358,7 +358,7 @@ fn recognize_nested_elems() {
 #[test]
 fn recognize_version() {
     let text = "   version    = \t  \"1.0\"";
-    let chars :Vec<char> = text.chars().collect();
+    let chars: Vec<char> = text.chars().collect();
     let ver_parse = parse_version(&chars, 0);
     match ver_parse {
         Ok(ver) => assert_eq!(ver.get_endpos(), chars.len()),
@@ -369,7 +369,7 @@ fn recognize_version() {
 #[test]
 fn recognize_encoding() {
     let text = "  encoding = 'utf-8'";
-    let chars :Vec<char> = text.chars().collect();
+    let chars: Vec<char> = text.chars().collect();
     let enc_parse = parse_encoding(&chars, 0);
     match enc_parse {
         Ok(enc) => assert_eq!(enc.get_endpos(), chars.len()),
@@ -380,7 +380,7 @@ fn recognize_encoding() {
 #[test]
 fn recognize_standalone() {
     let text = "   standalone =  \"yes\"";
-    let chars :Vec<char> = text.chars().collect();
+    let chars: Vec<char> = text.chars().collect();
     let stand_parse = parse_standalone(&chars, 0);
     match stand_parse {
         Ok(stand) => assert_eq!(stand.get_endpos(), chars.len()),
@@ -391,7 +391,7 @@ fn recognize_standalone() {
 #[test]
 fn recognize_xmldecl_version() {
     let text = "<?xml version = \'1.0\' ?>";
-    let chars :Vec<char> = text.chars().collect();
+    let chars: Vec<char> = text.chars().collect();
     let xdecl_parse = parse_xmldecl(&chars, 0);
     match xdecl_parse {
         Ok(xdecl) => assert_eq!(xdecl.get_endpos(), chars.len()),
@@ -402,10 +402,65 @@ fn recognize_xmldecl_version() {
 #[test]
 fn recognize_xmldecl() {
     let text = "<?xml version = \'1.0\' encoding = \'utf-8\' standalone = \'yes\' ?>";
-    let chars :Vec<char> = text.chars().collect();
+    let chars: Vec<char> = text.chars().collect();
     let xdecl_parse = parse_xmldecl(&chars, 0);
     match xdecl_parse {
         Ok(xdecl) => assert_eq!(xdecl.get_endpos(), chars.len()),
+        Err(e) => assert!(false, "should be valid parse, instead: {:?}", e),
+    }
+}
+
+#[test]
+fn recognize_extid1() {
+    let text = "SYSTEM  \"Some sort of thing\"";
+    let chars: Vec<char> = text.chars().collect();
+    let extid_parse = parse_externalid(&chars, 0);
+    match extid_parse {
+        Ok(extid) => assert_eq!(extid.get_endpos(), chars.len()),
+        Err(e) => assert!(false, "should be valid parse, instead: {:?}", e),
+    }
+}
+
+#[test]
+fn recognize_extid2() {
+    let text = "PUBLIC  \"another-sort\"   \"Some Sort of thing\"";
+    let chars: Vec<char> = text.chars().collect();
+    let extid_parse = parse_externalid(&chars, 0);
+    match extid_parse {
+        Ok(extid) => assert_eq!(extid.get_endpos(), chars.len()),
+        Err(e) => assert!(false, "should be valid parse, instead: {:?}", e),
+    }
+}
+
+#[test]
+fn recognize_simple_doctype() {
+    let text = "<!DOCTYPE  Doc_Type>";
+    let chars: Vec<char> = text.chars().collect();
+    let doctype_parse = parse_doctype(&chars, 0);
+    match doctype_parse {
+        Ok(doctype) => assert_eq!(doctype.get_endpos(), chars.len()),
+        Err(e) => assert!(false, "should be valid parse, instead: {:?}", e),
+    }
+}
+
+#[test]
+fn recognize_doctype_extid() {
+    let text = "<!DOCTYPE Doc_Type SYSTEM \"System Thing\" >";
+    let chars :Vec<char> = text.chars().collect();
+    let doctype_parse = parse_doctype(&chars, 0);
+    match doctype_parse {
+        Ok(doctype) => assert_eq!(doctype.get_endpos(), chars.len()),
+        Err(e) => assert!(false, "should be valid parse, instead: {:?}", e),
+    }
+}
+
+#[test]
+fn recognize_doctype_empty_intsub_explicit() {
+    let text = "<!DOCTYPE Doc_type []>";
+    let chars :Vec<char> = text.chars().collect();
+    let doctype_parse = parse_doctype(&chars, 0);
+    match doctype_parse {
+        Ok(doctype) => assert_eq!(doctype.get_endpos(), chars.len()),
         Err(e) => assert!(false, "should be valid parse, instead: {:?}", e),
     }
 }

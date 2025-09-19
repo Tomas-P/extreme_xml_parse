@@ -1,3 +1,5 @@
+pub mod error;
+
 #[cfg(test)]
 mod test;
 
@@ -20,7 +22,7 @@ pub enum XmlError {
     /// did not see opening <![CDATA[ tag while attempting to parse CDSect
     BadCDATAStart,
     /// No available data when trying to parse for character data
-    /// Need to make this an error because the rest of the parser doesn't expect 
+    /// Need to make this an error because the rest of the parser doesn't expect
     /// zero-length elements
     NoData,
     /// did not see opening <?xml when attempting to parse XmlDecl
@@ -189,6 +191,42 @@ impl Ends for SDDecl {
     }
 }
 
+impl Ends for ExternalID {
+    fn get_endpos(&self) -> usize {
+        match &self {
+            ExternalID::System {
+                start,
+                end,
+                sys_lit,
+            } => *end,
+            ExternalID::Public {
+                start,
+                end,
+                pub_lit,
+                sys_lit,
+            } => *end,
+        }
+    }
+}
+
+impl Ends for IntSubsetItem {
+    fn get_endpos(&self) -> usize {
+        unimplemented!();
+    }
+}
+
+impl Ends for IntSubset {
+    fn get_endpos(&self) -> usize {
+        unimplemented!();
+    }
+}
+
+impl Ends for DoctypeDecl {
+    fn get_endpos(&self) -> usize {
+        self.end
+    }
+}
+
 pub struct Doc {
     pub prolog: Prolog,
     pub elem: Elem,
@@ -210,12 +248,44 @@ pub fn parse_doc(text: &[char]) -> Result<Doc, XmlError> {
 }
 
 fn parse_prolog(text: &[char], start: usize) -> Result<Prolog, XmlError> {
-    todo!();
+    let maybe_decl = parse_xmldecl(text, start);
+    let (xdecl, pos) = match maybe_decl {
+        Ok(xmldecl) => {
+            let newpos = xmldecl.get_endpos();
+            (Some(xmldecl), newpos)
+        }
+        Err(_e) => (None, start),
+    };
+    let mut here = pos;
+    let mut miscs = Vec::new();
+    while let Ok(misc) = parse_misc(text, here) {
+        here = misc.get_endpos();
+        miscs.push(misc);
+    }
+    let maybe_doctypedecl = parse_doctype(text, here);
+    let (docdecl, pos1) = match maybe_doctypedecl {
+        Ok(doctypedecl) => {
+            let newpos = doctypedecl.get_endpos();
+            (Some(doctypedecl), newpos)
+        }
+        Err(_e) => (None, here),
+    };
+    let mut here2 = pos1;
+    while let Ok(misc) = parse_misc(text, here2) {
+        here2 = misc.get_endpos();
+        miscs.push(misc);
+    }
+    let prolog = Prolog {
+        xml_decl: xdecl,
+        doctype_decl: docdecl,
+        miscs: miscs,
+    };
+    Ok(prolog)
 }
 
-fn parse_xmldecl(text :&[char], start :usize) -> Result<XmlDecl, XmlError> {
+fn parse_xmldecl(text: &[char], start: usize) -> Result<XmlDecl, XmlError> {
     let subtext = &text[start..];
-    let needle :Vec<char> = "<?xml".chars().collect();
+    let needle: Vec<char> = "<?xml".chars().collect();
     if subtext.starts_with(&needle) {
         let mut here = start + needle.len();
         let version = parse_version(text, here)?;
@@ -225,7 +295,7 @@ fn parse_xmldecl(text :&[char], start :usize) -> Result<XmlDecl, XmlError> {
             Ok(encode_decl) => {
                 here = encode_decl.get_endpos();
                 Some(encode_decl)
-            },
+            }
             Err(_e) => None,
         };
         let maybe_standalone = parse_standalone(text, here);
@@ -233,24 +303,26 @@ fn parse_xmldecl(text :&[char], start :usize) -> Result<XmlDecl, XmlError> {
             Ok(stand) => {
                 here = stand.get_endpos();
                 Some(stand)
-            },
+            }
             Err(_e) => None,
         };
         let maybe_space = parse_ws(text, here);
         match maybe_space {
-            Ok(ws) => {here = ws.get_endpos();},
+            Ok(ws) => {
+                here = ws.get_endpos();
+            }
             Err(_e) => (),
         };
         let c_pen = text.get(here).ok_or(XmlError::TextEnd)?;
         if c_pen == &'?' {
-            let c_ult = text.get(here+1).ok_or(XmlError::TextEnd)?;
+            let c_ult = text.get(here + 1).ok_or(XmlError::TextEnd)?;
             if c_ult == &'>' {
                 let xmldecl = XmlDecl {
-                    start : start,
-                    end : here + 2,
-                    version : version,
-                    encoding : enc,
-                    standalone : sddecl,
+                    start: start,
+                    end: here + 2,
+                    version: version,
+                    encoding: enc,
+                    standalone: sddecl,
                 };
                 Ok(xmldecl)
             } else {
@@ -264,7 +336,7 @@ fn parse_xmldecl(text :&[char], start :usize) -> Result<XmlDecl, XmlError> {
     }
 }
 
-fn parse_eq(text :&[char], start :usize) -> Result<EqHelper, XmlError> {
+fn parse_eq(text: &[char], start: usize) -> Result<EqHelper, XmlError> {
     let pos1 = match parse_ws(text, start) {
         Ok(ws) => ws.get_endpos(),
         Err(_e) => start,
@@ -273,11 +345,11 @@ fn parse_eq(text :&[char], start :usize) -> Result<EqHelper, XmlError> {
     if c1 == &'=' {
         let pos2 = match parse_ws(text, pos1 + 1) {
             Ok(ws) => ws.get_endpos(),
-            Err(e) => pos1 + 1,
+            Err(_e) => pos1 + 1,
         };
         let eq = EqHelper {
-            start :start,
-            end : pos2,
+            start: start,
+            end: pos2,
         };
         Ok(eq)
     } else {
@@ -285,20 +357,20 @@ fn parse_eq(text :&[char], start :usize) -> Result<EqHelper, XmlError> {
     }
 }
 
-fn parse_standalone(text :&[char], start :usize) -> Result<SDDecl, XmlError> {
+fn parse_standalone(text: &[char], start: usize) -> Result<SDDecl, XmlError> {
     let lead_ws = parse_ws(text, start)?;
     let pos = lead_ws.get_endpos();
     let subtext = &text[pos..];
-    let needle :Vec<char> = "standalone".chars().collect();
+    let needle: Vec<char> = "standalone".chars().collect();
     if subtext.starts_with(&needle) {
         let pos1 = pos + needle.len();
         let eq = parse_eq(text, pos1)?;
         let pos2 = eq.end;
         let subtext2 = &text[pos2..];
-        let needle1 :Vec<char> = "\"yes\"".chars().collect();
-        let needle2 :Vec<char> = "\'yes\'".chars().collect();
-        let needle3 :Vec<char> = "\"no\"".chars().collect();
-        let needle4 :Vec<char> = "\'no\'".chars().collect();
+        let needle1: Vec<char> = "\"yes\"".chars().collect();
+        let needle2: Vec<char> = "\'yes\'".chars().collect();
+        let needle3: Vec<char> = "\"no\"".chars().collect();
+        let needle4: Vec<char> = "\'no\'".chars().collect();
         let mut here = pos2;
         let is_standalone = if subtext2.starts_with(&needle1) {
             here += 5;
@@ -316,23 +388,22 @@ fn parse_standalone(text :&[char], start :usize) -> Result<SDDecl, XmlError> {
             return Err(XmlError::KeywordMatchFail);
         };
         let standalone = SDDecl {
-            start : start,
-            end : here,
-            is_standalone : is_standalone,
+            start: start,
+            end: here,
+            is_standalone: is_standalone,
         };
 
         Ok(standalone)
-
     } else {
         Err(XmlError::KeywordMatchFail)
     }
 }
 
-fn parse_encoding(text :&[char], start :usize) -> Result<Encoding, XmlError> {
+fn parse_encoding(text: &[char], start: usize) -> Result<Encoding, XmlError> {
     let lead_ws = parse_ws(text, start)?;
     let pos = lead_ws.get_endpos();
     let subtext = &text[pos..];
-    let needle :Vec<char> = "encoding".chars().collect();
+    let needle: Vec<char> = "encoding".chars().collect();
     if subtext.starts_with(&needle) {
         let pos1 = pos + needle.len();
         let eq = parse_eq(text, pos1)?;
@@ -347,13 +418,21 @@ fn parse_encoding(text :&[char], start :usize) -> Result<Encoding, XmlError> {
             while cur_char != c0 {
                 if first {
                     match *cur_char {
-                        'A'..='Z' | 'a'..='z' => {arena.push(*cur_char);},
-                        _ => {return Err(XmlError::BadChar(*cur_char));},
+                        'A'..='Z' | 'a'..='z' => {
+                            arena.push(*cur_char);
+                        }
+                        _ => {
+                            return Err(XmlError::BadChar(*cur_char));
+                        }
                     };
                 } else {
                     match *cur_char {
-                        'A'..='Z' | 'a'..='z' | '0'..='9' | '.' | '_' | '-' => {arena.push(*cur_char);},
-                        _ => {return Err(XmlError::BadChar(*cur_char));},
+                        'A'..='Z' | 'a'..='z' | '0'..='9' | '.' | '_' | '-' => {
+                            arena.push(*cur_char);
+                        }
+                        _ => {
+                            return Err(XmlError::BadChar(*cur_char));
+                        }
                     };
                 }
                 first = false;
@@ -361,9 +440,9 @@ fn parse_encoding(text :&[char], start :usize) -> Result<Encoding, XmlError> {
                 cur_char = text.get(here).ok_or(XmlError::TextEnd)?;
             }
             let encoding = Encoding {
-                start : start,
-                end : here + 1,
-                enc_name : arena,
+                start: start,
+                end: here + 1,
+                enc_name: arena,
             };
             Ok(encoding)
         } else {
@@ -374,11 +453,11 @@ fn parse_encoding(text :&[char], start :usize) -> Result<Encoding, XmlError> {
     }
 }
 
-fn parse_version(text :&[char], start :usize) -> Result<VersionInfo, XmlError> {
+fn parse_version(text: &[char], start: usize) -> Result<VersionInfo, XmlError> {
     let lead_ws = parse_ws(text, start)?;
     let pos = lead_ws.get_endpos();
     let subtext = &text[pos..];
-    let needle :Vec<char> = "version".chars().collect();
+    let needle: Vec<char> = "version".chars().collect();
     if subtext.starts_with(&needle) {
         let pos1 = pos + needle.len();
         let pos2 = match parse_ws(text, pos1) {
@@ -403,7 +482,7 @@ fn parse_version(text :&[char], start :usize) -> Result<VersionInfo, XmlError> {
                     match *cur_char {
                         '0'..='9' => {
                             arena.push(*cur_char);
-                        },
+                        }
                         '.' => {
                             if !seen_dot {
                                 seen_dot = true;
@@ -411,8 +490,10 @@ fn parse_version(text :&[char], start :usize) -> Result<VersionInfo, XmlError> {
                             } else {
                                 return Err(XmlError::BadChar(*cur_char));
                             }
-                        },
-                        _ => {return Err(XmlError::BadChar(*cur_char));},
+                        }
+                        _ => {
+                            return Err(XmlError::BadChar(*cur_char));
+                        }
                     };
                     here += 1;
                     cur_char = text.get(here).ok_or(XmlError::TextEnd)?;
@@ -420,15 +501,17 @@ fn parse_version(text :&[char], start :usize) -> Result<VersionInfo, XmlError> {
                 let maybe_version_num = arena.parse::<f32>();
                 let version_num = match maybe_version_num {
                     Ok(num) => num,
-                    Err(_e) => {return Err(XmlError::KeywordMatchFail);},
+                    Err(_e) => {
+                        return Err(XmlError::KeywordMatchFail);
+                    }
                 };
                 if version_num >= 2.0 {
                     Err(XmlError::KeywordMatchFail)
                 } else {
                     let version_info = VersionInfo {
-                        start : start,
-                        end : here + 1,
-                        ver_num : version_num,
+                        start: start,
+                        end: here + 1,
+                        ver_num: version_num,
                     };
                     Ok(version_info)
                 }
@@ -443,8 +526,277 @@ fn parse_version(text :&[char], start :usize) -> Result<VersionInfo, XmlError> {
     }
 }
 
-fn parse_doctype(text :&[char], start :usize) -> Result<DoctypeDecl, XmlError> {
-    todo!();
+fn parse_doctype(text: &[char], start: usize) -> Result<DoctypeDecl, XmlError> {
+    let subtext = &text[start..];
+    let needle: Vec<char> = "<!DOCTYPE".chars().collect();
+    if subtext.starts_with(&needle) {
+        let mut here = start + needle.len();
+        let spacer1 = parse_ws(text, here)?;
+        here = spacer1.get_endpos();
+        let name = parse_name(text, here)?;
+        here += name.0.len();
+        match parse_ws(text, here) {
+            Ok(ws) => {here = ws.get_endpos();},
+            Err(_e) => (),
+        };
+        let maybe_extid = parse_externalid(text, here);
+        let extid = match maybe_extid {
+            Ok(ex_id) => {
+                let ending = ex_id.get_endpos();
+                here = ending;
+                Some(ex_id)
+            },
+            Err(_e) => None,
+        };
+        match parse_ws(text, here) {
+            Ok(ws) => {here = ws.get_endpos();},
+            Err(_e) => (),
+        };
+        let c0 = *text.get(here).ok_or(XmlError::TextEnd)?;
+        if c0 == '[' {
+            here += 1;
+            let maybe_intsub = parse_intsubset(text, here);
+            let intsub = match maybe_intsub {
+                Ok(isub) => {
+                    here = isub.get_endpos();
+                    Some(isub)
+                },
+                Err(_e) => None,
+            };
+            let c1 = *text.get(here).ok_or(XmlError::TextEnd)?;
+            if c1 == ']' {
+                here += 1;
+                match parse_ws(text, here) {
+                    Ok(ws) => {here = ws.get_endpos();},
+                    Err(_e) => (),
+                };
+                let c2 = *text.get(here).ok_or(XmlError::TextEnd)?;
+                if c2 == '>' {
+                    let docdecl = DoctypeDecl {
+                        start : start,
+                        end : here + 1,
+                        name : name,
+                        ext_id : extid,
+                        int_subset : intsub,
+                    };
+                    Ok(docdecl)
+                } else {
+                    Err(XmlError::BadChar(c2))
+                }
+            } else {
+                Err(XmlError::BadChar(c1))
+            }
+        } else if c0 == '>' {
+            let docdecl = DoctypeDecl {
+                start : start,
+                end : here + 1,
+                name : name,
+                ext_id : extid,
+                int_subset : None,
+            };
+            Ok(docdecl)
+        } else {
+            Err(XmlError::BadChar(c0))
+        }
+    } else {
+        Err(XmlError::KeywordMatchFail)
+    }
+}
+
+fn parse_syslit(text: &[char], start: usize) -> Result<String, XmlError> {
+    let c0 = text.get(start).ok_or(XmlError::TextEnd)?;
+    let single_qoute = c0 == &'\'';
+    if c0 == &'\"' || single_qoute {
+        let mut here = start + 1;
+        let mut arena = String::new();
+        while let Some(c) = text.get(here) {
+            match *c {
+                '\'' => {
+                    if single_qoute {
+                        return Ok(arena);
+                    }
+                }
+                '\"' => {
+                    if !single_qoute {
+                        return Ok(arena);
+                    }
+                }
+                _ => (),
+            };
+            arena.push(*c);
+            here += 1;
+        }
+        Err(XmlError::TextEnd)
+    } else {
+        Err(XmlError::BadChar(*c0))
+    }
+}
+
+fn parse_pubidlit(text: &[char], start: usize) -> Result<String, XmlError> {
+    let c0 = text.get(start).ok_or(XmlError::TextEnd)?;
+    let single_qoute = c0 == &'\'';
+    if c0 == &'\"' || single_qoute {
+        let mut here = start + 1;
+        let mut arena = String::new();
+        while let Some(c) = text.get(here) {
+            match *c {
+                '\'' => {
+                    if single_qoute {
+                        return Ok(arena);
+                    } else {
+                        arena.push(*c);
+                    }
+                }
+                '\"' => {
+                    if !single_qoute {
+                        return Ok(arena);
+                    }
+                }
+                ' '
+                | '\r'
+                | '\n'
+                | 'a'..='z'
+                | 'A'..='Z'
+                | '0'..='9'
+                | '-'
+                | '('
+                | ')'
+                | '+'
+                | ','
+                | '.'
+                | '/'
+                | ':'
+                | '='
+                | '?'
+                | ';'
+                | '!'
+                | '*'
+                | '#'
+                | '@'
+                | '$'
+                | '_'
+                | '%' => {
+                    arena.push(*c);
+                }
+                _ => {
+                    return Err(XmlError::BadChar(*c));
+                }
+            }
+            here += 1;
+        }
+        Err(XmlError::TextEnd)
+    } else {
+        Err(XmlError::BadChar(*c0))
+    }
+}
+
+fn parse_externalid(text: &[char], start: usize) -> Result<ExternalID, XmlError> {
+    let subtext = &text[start..];
+    let needle1: Vec<char> = "SYSTEM".chars().collect();
+    let needle2: Vec<char> = "PUBLIC".chars().collect();
+    if subtext.starts_with(&needle1) {
+        let pos = start + needle1.len();
+        let spacer = parse_ws(text, pos)?;
+        let syslit_start = spacer.get_endpos();
+        let syslit = parse_syslit(text, syslit_start)?;
+        let ext_id = ExternalID::System {
+            start: start,
+            end: syslit_start + syslit.len() + 2, // account for qoute characters
+            sys_lit: syslit,
+        };
+        Ok(ext_id)
+    } else if subtext.starts_with(&needle2) {
+        let pos = start + needle2.len();
+        let spacer1 = parse_ws(text, pos)?;
+        let pubid_start = spacer1.get_endpos();
+        let pubid_lit = parse_pubidlit(text, pubid_start)?;
+        let pubid_end = pubid_start + pubid_lit.len() + 2; // account for qoute characters
+        let spacer2 = parse_ws(text, pubid_end)?;
+        let syslit_start = spacer2.get_endpos();
+        let syslit = parse_syslit(text, syslit_start)?;
+        let ext_id = ExternalID::Public {
+            start: start,
+            end: syslit_start + syslit.len() + 2, // account for qoute characters
+            pub_lit: pubid_lit,
+            sys_lit: syslit,
+        };
+        Ok(ext_id)
+    } else {
+        Err(XmlError::KeywordMatchFail)
+    }
+}
+
+fn parse_intsubset(text: &[char], start: usize) -> Result<IntSubset, XmlError> {
+    let mut items = Vec::new();
+    let mut here = start;
+    while let Ok(item) = parse_int_subset_item(text, here) {
+        here = item.get_endpos();
+        items.push(item);
+    }
+    if items.len() > 0 {
+        let subset = IntSubset {
+            items : items,
+        };
+        Ok(subset)
+    } else {
+        Err(XmlError::NoData)
+    }
+}
+
+fn parse_int_subset_item(text :&[char], start :usize) -> Result<IntSubsetItem, XmlError> {
+    if let Ok(ws) = parse_ws(text, start) {
+        Ok(IntSubsetItem::Blank(ws))
+    } else if let Ok(peref) = parse_pereference(text, start) {
+        Ok(IntSubsetItem::PEReference(peref))
+    } else if let Ok(elemdecl) = parse_elemdecl(text, start) {
+        Ok(IntSubsetItem::ElemDecl(elemdecl))
+    } else if let Ok(attlist) = parse_attlistdecl(text, start) {
+        Ok(IntSubsetItem::AttlistDecl(attlist))
+    } else if let Ok(entity) = parse_entitydecl(text, start) {
+        Ok(IntSubsetItem::EntityDecl(entity))
+    } else if let Ok(notation) = parse_notationdecl(text, start) {
+        Ok(IntSubsetItem::NotationDecl(notation))
+    } else if let Ok(proc_instr) = parse_pi(text, start) {
+        Ok(IntSubsetItem::ProcInstr(proc_instr))
+    } else if let Ok(comment) = parse_comment(text, start) {
+        Ok(IntSubsetItem::Comment(comment))
+    } else {
+        Err(XmlError::NoValidVariant)
+    }
+}
+
+fn parse_notationdecl(text :&[char], start :usize) -> Result<NotationDecl, XmlError> {
+    unimplemented!();
+}
+
+fn parse_attlistdecl(text :&[char], start :usize) -> Result<AttlistDecl, XmlError> {
+    unimplemented!();
+}
+
+fn parse_entitydecl(text :&[char], start :usize) -> Result<EntityDecl, XmlError> {
+    unimplemented!();
+}
+
+fn parse_elemdecl(text :&[char], start :usize) -> Result<ElemDecl, XmlError> {
+    unimplemented!();
+}
+
+fn parse_pereference(text :&[char], start :usize) -> Result<PEReference, XmlError> {
+    let c0 = *text.get(start).ok_or(XmlError::TextEnd)?;
+    if c0 == '%' {
+        let pos = start + 1;
+        let name = parse_name(text, pos)?;
+        let pos1 = pos + name.0.len();
+        let c1 = *text.get(pos1).ok_or(XmlError::TextEnd)?;
+        if c1 == ';' {
+            let peref = PEReference(name);
+            Ok(peref)
+        } else {
+            Err(XmlError::BadChar(c1))
+        }
+    } else {
+        Err(XmlError::BadChar(c0))
+    }
 }
 
 fn parse_tail(text: &[char], start: usize) -> Result<Vec<Misc>, XmlError> {
@@ -468,13 +820,10 @@ fn parse_tail(text: &[char], start: usize) -> Result<Vec<Misc>, XmlError> {
 
 fn parse_misc(text: &[char], start: usize) -> Result<Misc, XmlError> {
     if let Ok(ws) = parse_ws(text, start) {
-        println!("parsed WS");
         Ok(Misc::Ws(ws))
     } else if let Ok(comment) = parse_comment(text, start) {
-        println!("parsed comment");
         Ok(Misc::Comment(comment))
     } else if let Ok(pi) = parse_pi(text, start) {
-        println!("parsed PI");
         Ok(Misc::ProcInstr(pi))
     } else if text.get(start).is_none() {
         Err(XmlError::TextEnd)
@@ -912,10 +1261,10 @@ fn parse_chardata(text: &[char], start: usize) -> Result<CharData, XmlError> {
             '<' => {
                 if data.len() > 0 {
                     let cdata = CharData {
-                    start: start,
-                    text: data,
-                };
-                return Ok(cdata);
+                        start: start,
+                        text: data,
+                    };
+                    return Ok(cdata);
                 } else {
                     return Err(XmlError::NoData);
                 }
@@ -923,14 +1272,13 @@ fn parse_chardata(text: &[char], start: usize) -> Result<CharData, XmlError> {
             '&' => {
                 if data.len() > 0 {
                     let cdata = CharData {
-                    start: start,
-                    text: data,
-                };
-                return Ok(cdata);
-            } else {
-                return Err(XmlError::NoData);
-            }
-                
+                        start: start,
+                        text: data,
+                    };
+                    return Ok(cdata);
+                } else {
+                    return Err(XmlError::NoData);
+                }
             }
             ']' => {
                 count += 1;
@@ -1179,41 +1527,91 @@ fn parse_reference(text: &[char], start: usize) -> Result<Reference, XmlError> {
     }
 }
 
-
-
 pub struct Prolog {
-    xml_decl :Option<XmlDecl>,
-    doctype_decl :Option<DoctypeDecl>,
-    miscs :Vec<Misc>,
+    xml_decl: Option<XmlDecl>,
+    doctype_decl: Option<DoctypeDecl>,
+    miscs: Vec<Misc>,
 }
 
-struct XmlDecl {
-    start :usize,
-    end :usize,
-    version :VersionInfo,
-    encoding :Option<Encoding>,
-    standalone :Option<SDDecl>,
+pub struct XmlDecl {
+    start: usize,
+    end: usize,
+    version: VersionInfo,
+    encoding: Option<Encoding>,
+    standalone: Option<SDDecl>,
 }
 
 struct VersionInfo {
-    start :usize,
-    end :usize,
-    ver_num :f32,
+    start: usize,
+    end: usize,
+    ver_num: f32,
 }
 
 struct Encoding {
-    start :usize,
-    end :usize,
-    enc_name :String,
+    start: usize,
+    end: usize,
+    enc_name: String,
 }
 
 struct SDDecl {
-    start :usize,
-    end :usize,
-    is_standalone :bool,
+    start: usize,
+    end: usize,
+    is_standalone: bool,
 }
 
-struct DoctypeDecl;
+struct DoctypeDecl {
+    start: usize,
+    end: usize,
+    name: Name,
+    ext_id: Option<ExternalID>,
+    int_subset: Option<IntSubset>,
+}
+
+#[derive(Debug)]
+enum ExternalID {
+    System {
+        start: usize,
+        end: usize,
+        sys_lit: String,
+    },
+    Public {
+        start: usize,
+        end: usize,
+        pub_lit: String,
+        sys_lit: String,
+    },
+}
+
+struct IntSubset {
+    items: Vec<IntSubsetItem>,
+}
+
+enum IntSubsetItem {
+    Blank(Ws),
+    PEReference(PEReference),
+    ElemDecl(ElemDecl),
+    AttlistDecl(AttlistDecl),
+    EntityDecl(EntityDecl),
+    NotationDecl(NotationDecl),
+    ProcInstr(ProcInstr),
+    Comment(Comment),
+}
+
+struct PEReference(Name);
+
+impl PEReference {
+    fn textlen(&self) -> usize {
+        self.0.0.len() + 2 // take delimiters into account
+    }
+}
+
+struct ElemDecl;
+
+struct AttlistDecl;
+
+enum EntityDecl{}
+
+struct NotationDecl;
 
 pub enum Elem {
     Empty(EmptyElem),
@@ -1341,6 +1739,6 @@ struct PITarget {
 struct Name(String);
 
 struct EqHelper {
-    start :usize,
-    end :usize,
+    start: usize,
+    end: usize,
 }
