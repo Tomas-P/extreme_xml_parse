@@ -465,3 +465,101 @@ fn recognize_doctype_empty_intsub_explicit() {
     }
 }
 
+#[test]
+fn recognize_peref() {
+    let text = "%Something;";
+    let chars :Vec<char> = text.chars().collect();
+    let peref_parse = parse_pereference(&chars, 0);
+    match peref_parse {
+        Ok(peref) => assert_eq!(peref.textlen(), chars.len()),
+        Err(e) => assert!(false, "should be valid parse, instead :{:?}", e),
+    }
+}
+
+#[test]
+fn recognize_public_id() {
+    let text = "PUBLIC \"America\"";
+    let chars :Vec<char> = text.chars().collect();
+    let pubid_parse = parse_publicid(&chars, 0);
+    match pubid_parse {
+        Ok(pub_id) => assert_eq!(pub_id.get_endpos(), chars.len()),
+        Err(e) => assert!(false, "should be valid parse, instead: {:?}", e),
+    }
+}
+
+#[test]
+fn reject_bad_public_id() {
+    let text = "PUBLIC \"Americ";
+    let chars :Vec<char> = text.chars().collect();
+    let pubid_parse = parse_publicid(&chars, 0);
+    match pubid_parse {
+        Ok(_pub_id) => assert!(false, "should reject this"),
+        Err(e) => assert_eq!(e, XmlError::TextEnd),
+    }
+}
+
+#[test]
+fn recognize_notation_decl() {
+    let text = "<!NOTATION MyNotation PUBLIC \"America\" >";
+    let chars :Vec<char> = text.chars().collect();
+    let notedecl_parse = parse_notationdecl(&chars, 0);
+    match notedecl_parse {
+        Ok(notedecl) => assert_eq!(notedecl.get_endpos(), chars.len()),
+        Err(e) => assert!(false, "expected valid parse, instead: {:?}", e),
+    }
+}
+
+#[test]
+fn recognize_notation_decl2() {
+    let text = "<!NOTATION MyNotation SYSTEM \"America\" >";
+    let chars :Vec<char> = text.chars().collect();
+    let notedecl_parse = parse_notationdecl(&chars, 0);
+    match notedecl_parse {
+        Ok(notedecl) => assert_eq!(notedecl.get_endpos(), chars.len()),
+        Err(e) => assert!(false, "expected valid parse, instead: {:?}", e),
+    }
+}
+
+#[test]
+fn recognize_ndatadecl() {
+    let text = "  NDATA Something";
+    let chars :Vec<char> = text.chars().collect();
+    let ndatadecl_parse = parse_ndatadecl(&chars, 0);
+    match ndatadecl_parse {
+        Ok(ndata) => assert_eq!(ndata.get_endpos(), chars.len()),
+        Err(e) => assert!(false, "expected valid parse, instead: {:?}", e),
+    }
+}
+
+#[test]
+fn recognize_gedecl() {
+    let text = "<!ENTITY SomeEntity \"Such Text\" >";
+    let chars :Vec<char> = text.chars().collect();
+    let gedecl_parse = parse_gedecl(&chars, 0);
+    match gedecl_parse {
+        Ok(gedecl) => assert_eq!(gedecl.get_endpos(), chars.len()),
+        Err(e) => assert!(false, "expected valid parse, instead: {:?}", e),
+    }
+}
+
+#[test]
+fn recognize_pedecl() {
+    let text = "<!ENTITY % SomeEntity \"Such Text\" >";
+    let chars :Vec<char> = text.chars().collect();
+    let pedecl_parse = parse_pedecl(&chars, 0);
+    match pedecl_parse {
+        Ok(pedecl) => assert_eq!(pedecl.get_endpos(), chars.len()),
+        Err(e) => assert!(false, "expected valid parse, instead: {:?}", e),
+    }
+}
+
+#[test]
+fn recognize_entitydecl1() {
+    let text = "<!ENTITY SuchEntity SYSTEM \"Such System Lit\" >";
+    let chars :Vec<char> = text.chars().collect();
+    let entitydecl_parse = parse_entitydecl(&chars, 0);
+    match entitydecl_parse {
+        Ok(entitydecl) => assert_eq!(entitydecl.get_endpos(), chars.len()),
+        Err(e) => assert!(false, "expected valid parse, instead: {:?}", e),
+    }
+}

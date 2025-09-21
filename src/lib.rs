@@ -3,7 +3,7 @@ pub mod error;
 #[cfg(test)]
 mod test;
 
-#[derive(Debug)]
+#[derive(Debug, PartialEq)]
 pub enum XmlError {
     /// character not allowed in current parsing context
     BadChar(char),
@@ -226,6 +226,84 @@ impl Ends for DoctypeDecl {
         self.end
     }
 }
+
+impl Ends for PublicID {
+    fn get_endpos(&self) -> usize {
+        self.end
+    }
+}
+
+impl Ends for NotationID {
+    fn get_endpos(&self) -> usize {
+        match &self {
+            NotationID::External(extid) => extid.get_endpos(),
+            NotationID::Public(pubid) => pubid.get_endpos(),
+        }
+    }
+}
+
+impl Ends for NotationDecl {
+    fn get_endpos(&self) -> usize {
+        self.end
+    }
+}
+
+impl Ends for NDataDecl {
+    fn get_endpos(&self) -> usize {
+        self.end
+    }
+}
+
+impl Ends for EntityValue {
+    fn get_endpos(&self) -> usize {
+        self.start + self.text.len() + 2 // take qoute chars into account
+    }
+}
+
+impl Ends for PEDef {
+    fn get_endpos(&self) -> usize {
+        match &self {
+            PEDef::EntityValue(value) => value.get_endpos(),
+            PEDef::ExternalID(ext_id) => ext_id.get_endpos(),
+        }
+    }
+}
+
+impl Ends for EntityDef {
+    fn get_endpos(&self) -> usize {
+        match &self {
+            EntityDef::EntityValue(eval) => eval.get_endpos(),
+            EntityDef::External{ext_id, ndatadecl} => {
+                match ndatadecl {
+                    Some(ndata) => ndata.get_endpos(),
+                    None => ext_id.get_endpos(),
+                }
+            }
+        }
+    }
+}
+
+impl Ends for GEDecl {
+    fn get_endpos(&self) -> usize {
+        self.end
+    }
+}
+
+impl Ends for PEDecl {
+    fn get_endpos(&self) -> usize {
+        self.end
+    }
+}
+
+impl Ends for EntityDecl {
+    fn get_endpos(&self) -> usize {
+        match &self {
+            EntityDecl::GEDecl(gedecl) => gedecl.get_endpos(),
+            EntityDecl::PEDecl(pedecl) => pedecl.get_endpos(),
+        }
+    }
+}
+
 
 pub struct Doc {
     pub prolog: Prolog,
@@ -765,20 +843,232 @@ fn parse_int_subset_item(text :&[char], start :usize) -> Result<IntSubsetItem, X
     }
 }
 
+fn parse_publicid(text :&[char], start :usize) -> Result<PublicID, XmlError> {
+    let subtext = &text[start..];
+    let needle :Vec<char> = "PUBLIC".chars().collect();
+    if subtext.starts_with(&needle) {
+        let mut here = start + needle.len();
+        let ws = parse_ws(text, here)?;
+        here = ws.get_endpos();
+        let pub_lit = parse_pubidlit(text, here)?;
+        let pub_id = PublicID {
+            start : start,
+            end : here + pub_lit.len() + 2,
+            text : pub_lit,
+        };
+        Ok(pub_id)
+    } else {
+        Err(XmlError::KeywordMatchFail)
+    }
+}
+
 fn parse_notationdecl(text :&[char], start :usize) -> Result<NotationDecl, XmlError> {
-    unimplemented!();
+    let subtext = &text[start..];
+    let needle :Vec<char> = "<!NOTATION".chars().collect();
+    if subtext.starts_with(&needle) {
+        let mut here = start + needle.len();
+        let spacer = parse_ws(text, here)?;
+        here = spacer.get_endpos();
+        let name = parse_name(text, here)?;
+        here += name.0.len();
+        let spacer2 = parse_ws(text, here)?;
+        here = spacer2.get_endpos();
+        let maybe_extid = parse_externalid(text, here);
+        let note_id = match maybe_extid {
+            Ok(extid) => NotationID::External(extid),
+            Err(_e) => match parse_publicid(text, here) {
+                Ok(pubid) => NotationID::Public(pubid),
+                Err(_e2) => {return Err(_e2);},
+            },
+        };
+        here = note_id.get_endpos();
+        let maybe_trailws = parse_ws(text, here);
+        match maybe_trailws {
+            Ok(ws) => {here = ws.get_endpos();},
+            Err(_e) => (),
+        };
+        let clast = text.get(here).ok_or(XmlError::TextEnd)?;
+        if clast == &'>' {
+            let note_decl = NotationDecl {
+                start : start,
+                end : here + 1,
+                name : name,
+                notation_id : note_id,
+            };
+            Ok(note_decl)
+        } else {
+            Err(XmlError::BadChar(*clast))
+        }
+    } else {
+        Err(XmlError::KeywordMatchFail)
+    }
 }
 
 fn parse_attlistdecl(text :&[char], start :usize) -> Result<AttlistDecl, XmlError> {
     unimplemented!();
 }
 
-fn parse_entitydecl(text :&[char], start :usize) -> Result<EntityDecl, XmlError> {
+fn parse_elemdecl(text :&[char], start :usize) -> Result<ElemDecl, XmlError> {
     unimplemented!();
 }
 
-fn parse_elemdecl(text :&[char], start :usize) -> Result<ElemDecl, XmlError> {
-    unimplemented!();
+fn parse_entitydecl(text :&[char], start :usize) -> Result<EntityDecl, XmlError> {
+    if let Ok(gedecl) = parse_gedecl(text, start) {
+        Ok(EntityDecl::GEDecl(gedecl))
+    } else if let Ok(pedecl) = parse_pedecl(text, start) {
+        Ok(EntityDecl::PEDecl(pedecl))
+    } else {
+        Err(XmlError::NoValidVariant)
+    }
+}
+
+fn parse_gedecl(text :&[char], start :usize) -> Result<GEDecl, XmlError> {
+    let subtext = &text[start..];
+    let needle :Vec<char> = "<!ENTITY".chars().collect();
+    if subtext.starts_with(&needle) {
+        let spacer1 = parse_ws(text, start + needle.len())?;
+        let name = parse_name(text, spacer1.get_endpos())?;
+        let spacer2 = parse_ws(text, spacer1.get_endpos() + name.0.len())?;
+        let entity_def = parse_entitydef(text, spacer2.get_endpos())?;
+        let mut here :usize = entity_def.get_endpos();
+        let maybe_tailws = parse_ws(text, here);
+        match maybe_tailws {
+            Ok(ws) => {here = ws.get_endpos();},
+            Err(_e) => (),
+        };
+        let c_last = *text.get(here).ok_or(XmlError::TextEnd)?;
+        if c_last == '>' {
+            let gedecl = GEDecl {
+                start : start,
+                end : here + 1,
+                name : name,
+                entity_def : entity_def,
+            };
+            Ok(gedecl)
+        } else {
+            Err(XmlError::BadChar(c_last))
+        }
+    } else {
+        Err(XmlError::KeywordMatchFail)
+    }
+}
+
+
+fn parse_pedecl(text :&[char], start :usize) -> Result<PEDecl, XmlError> {
+    let subtext = &text[start..];
+    let needle :Vec<char> = "<!ENTITY".chars().collect();
+    if subtext.starts_with(&needle) {
+        let spacer1 = parse_ws(text, start + needle.len())?;
+        let c0 = *text.get(spacer1.get_endpos()).ok_or(XmlError::TextEnd)?;
+        if c0 == '%' {
+            let spacer2 = parse_ws(text, spacer1.get_endpos() +1)?;
+            let name = parse_name(text, spacer2.get_endpos())?;
+            let spacer3 = parse_ws(text, spacer2.get_endpos() + name.0.len())?;
+            let pe_def = parse_pedef(text, spacer3.get_endpos())?;
+            let mut here = pe_def.get_endpos();
+            let maybe_tailws = parse_ws(text, here);
+            match maybe_tailws {
+                Ok(ws) => {here = ws.get_endpos();},
+                Err(_e) => (),
+            };
+            let c_last = *text.get(here).ok_or(XmlError::TextEnd)?;
+            if c_last == '>' {
+                let pe_decl = PEDecl {
+                    start : start,
+                    end : here + 1,
+                    name : name,
+                    pedef : pe_def,
+                };
+                Ok(pe_decl)
+            } else {
+                Err(XmlError::BadChar(c_last))
+            }
+        } else {
+            Err(XmlError::BadChar(c0))
+        }
+    } else {
+        Err(XmlError::KeywordMatchFail)
+    }
+}
+
+fn parse_entitydef(text :&[char], start :usize) -> Result<EntityDef, XmlError> {
+    if let Ok(ent_val) = parse_entityvalue(text, start) {
+        Ok(EntityDef::EntityValue(ent_val))
+    } else {
+        let ext_id = parse_externalid(text, start)?;
+        let pos = ext_id.get_endpos();
+        let maybe_ndatadecl = parse_ndatadecl(text, pos);
+        match maybe_ndatadecl {
+            Ok(ndata) => {
+                let entity_def = EntityDef::External {
+                    ext_id : ext_id,
+                    ndatadecl : Some(ndata),
+                };
+                Ok(entity_def)
+            },
+            Err(_e) => {
+                let entity_def = EntityDef::External {
+                    ext_id : ext_id,
+                    ndatadecl : None,
+                };
+                Ok(entity_def)
+            }
+        }
+    }
+}
+
+fn parse_pedef(text :&[char], start :usize) -> Result<PEDef, XmlError> {
+    if let Ok(ent_val) = parse_entityvalue(text, start) {
+        Ok(PEDef::EntityValue(ent_val))
+    } else if let Ok(ext_id) = parse_externalid(text, start) {
+        Ok(PEDef::ExternalID(ext_id))
+    } else {
+        Err(XmlError::NoValidVariant)
+    }
+}
+
+fn parse_entityvalue(text :&[char], start :usize) -> Result<EntityValue, XmlError> {
+    let mut arena = String::new();
+    let c0 = *text.get(start).ok_or(XmlError::TextEnd)?;
+    if c0 == '\"' {
+        let mut here = start + 1;
+        while let Ok(c) = text.get(here).ok_or(XmlError::TextEnd) {
+            match c {
+                '\"' => {
+                    let evalue = EntityValue {
+                        start : start,
+                        text :arena
+                    };
+                    return Ok(evalue);
+                },
+                _ => {
+                    arena.push(*c);
+                }
+            }
+            here += 1;
+        }
+        Err(XmlError::TextEnd)
+    } else if c0 == '\'' {
+        let mut here = start + 1;
+        while let Ok(c) = text.get(here).ok_or(XmlError::TextEnd) {
+            match c {
+                '\'' => {
+                    let evalue = EntityValue {
+                        start : start,
+                        text : arena
+                    };
+                    return Ok(evalue);
+                },
+                _ => {
+                    arena.push(*c);
+                }
+            }
+            here += 1;
+        }
+        Err(XmlError::TextEnd)
+    } else {
+        Err(XmlError::BadChar(c0))
+    }
 }
 
 fn parse_pereference(text :&[char], start :usize) -> Result<PEReference, XmlError> {
@@ -1527,6 +1817,27 @@ fn parse_reference(text: &[char], start: usize) -> Result<Reference, XmlError> {
     }
 }
 
+fn parse_ndatadecl(text :&[char], start :usize) -> Result<NDataDecl, XmlError> {
+    let leadspace = parse_ws(text, start)?;
+    let pos1 = leadspace.get_endpos();
+    let subtext = &text[pos1..];
+    let needle :Vec<char> = "NDATA".chars().collect();
+    if subtext.starts_with(&needle) {
+        let pos2 = pos1 + needle.len();
+        let spacer = parse_ws(text, pos2)?;
+        let pos3 = spacer.get_endpos();
+        let name = parse_name(text, pos3)?;
+        let ndatadecl = NDataDecl {
+            start : start,
+            end : pos3 + name.0.len(),
+            name : name,
+        };
+        Ok(ndatadecl)
+    } else {
+        Err(XmlError::KeywordMatchFail)
+    }
+}
+
 pub struct Prolog {
     xml_decl: Option<XmlDecl>,
     doctype_decl: Option<DoctypeDecl>,
@@ -1607,11 +1918,85 @@ impl PEReference {
 
 struct ElemDecl;
 
-struct AttlistDecl;
+struct AttlistDecl {
+    start :usize,
+    end :usize,
+    name :Name,
+    att_defs :Vec<AttDef>,
+}
 
-enum EntityDecl{}
+struct AttDef {
+    start :usize,
+    end :usize,
+    name :Name,
+    att_type :AttType,
+    default_decl :DefaultDecl,
+}
 
-struct NotationDecl;
+enum AttType {}
+
+enum DefaultDecl {}
+
+enum EntityDecl{
+    GEDecl(GEDecl),
+    PEDecl(PEDecl),
+}
+
+
+struct GEDecl {
+    start :usize,
+    end :usize,
+    name :Name,
+    entity_def :EntityDef,
+}
+struct PEDecl {
+    start :usize,
+    end :usize,
+    name :Name,
+    pedef :PEDef,
+}
+
+enum PEDef {
+    EntityValue(EntityValue),
+    ExternalID(ExternalID),
+}
+
+enum EntityDef {
+    EntityValue(EntityValue),
+    External {
+        ext_id :ExternalID,
+        ndatadecl :Option<NDataDecl>,
+    }
+}
+
+struct NDataDecl {
+    start :usize,
+    end: usize,
+    name :Name,
+}
+
+struct EntityValue {
+    start :usize,
+    text :String,
+}
+
+struct NotationDecl {
+    start :usize,
+    end :usize,
+    name :Name,
+    notation_id :NotationID,
+}
+
+enum NotationID {
+    External(ExternalID),
+    Public(PublicID),
+}
+
+struct PublicID {
+    start :usize,
+    end :usize,
+    text :String,
+}
 
 pub enum Elem {
     Empty(EmptyElem),
